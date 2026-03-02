@@ -385,7 +385,7 @@ def normalize_event_classifications(raw: dict) -> tuple[list[dict], dict[int, st
         typ = clean(rec.get("typeOfOccurrence"), "Unknown type")
         cls = clean(rec.get("eventClassification"), "Unknown classification")
 
-        path = f"{area} &gt; {typ} &gt; {cls}"
+        path = f"{area} > {typ} > {cls}"
 
         selectable_ids.add(event_id)
         by_id[event_id] = path
