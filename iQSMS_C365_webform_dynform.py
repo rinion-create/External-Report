@@ -30,7 +30,7 @@ FORM_ID = int(os.getenv("IQSMS_FORM_ID", "2149"))
 API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or ""
 DEFAULT_CREATOR_ID = int(os.getenv("IQSMS_CREATOR_ID", "141"))
 FORM_PASSWORD = os.getenv("FORM_PASSWORD", "123")
-KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground &amp;amp; Cargo Safety Report").strip()
+KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground & Cargo Safety Report").strip()
 
 EVENT_CLASS_PAGE_SIZE = int(os.getenv("IQSMS_EVENT_CLASS_PAGE_SIZE", "200"))
 EVENT_CLASS_CACHE_TTL_SECONDS = int(os.getenv("EVENT_CLASS_CACHE_TTL_SECONDS", "900"))
@@ -42,7 +42,7 @@ ECID_FORM_MAP_TTL_SECONDS = int(os.getenv("ECID_FORM_MAP_TTL_SECONDS", "3600"))
 # =============================================================================
 # Airport CSV now lives next to this script
 # =============================================================================
-AIRPORT_CSV_FILENAME = os.getenv("AIRPORT_FORM_MAP_PATH", str(Path(__file__).with_name("icao-iata.csv.csv")))
+AIRPORT_CSV_FILENAME = os.getenv("AIRPORT_FORM_MAP_PATH", str(Path(__file__).with_name("icao-iata.csv")))
 
 FIELD_DEFAULTS_JSON = os.getenv("IQSMS_FIELD_DEFAULTS_JSON", "").strip()
 FALLBACK_FIELD_DEFAULTS = {
