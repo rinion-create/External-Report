@@ -688,7 +688,7 @@ if resolved_form_id != st.session_state.active_form_id:
 with st.spinner(f"Loading form schema (Form ID {st.session_state.active_form_id})…"):
     fields, _anon_default = get_form_fields_cached(st.session_state.active_form_id)
 defaults = build_defaults(fields)
-st.caption(f"Loaded Form ID: **{st.session_state.active_form_id}**")
+st.caption(f"Loaded form for lfnr: **{st.session_state.active_form_id}**")
 
 
 # =============================================================================
