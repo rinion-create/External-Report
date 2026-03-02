@@ -30,7 +30,7 @@ FORM_ID = int(os.getenv("IQSMS_FORM_ID", "2149"))
 API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or ""
 DEFAULT_CREATOR_ID = int(os.getenv("IQSMS_CREATOR_ID", "141"))
 FORM_PASSWORD = os.getenv("FORM_PASSWORD", "123")
-KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground &amp; Cargo Safety Report").strip()
+KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground &amp;amp; Cargo Safety Report").strip()
 
 EVENT_CLASS_PAGE_SIZE = int(os.getenv("IQSMS_EVENT_CLASS_PAGE_SIZE", "200"))
 EVENT_CLASS_CACHE_TTL_SECONDS = int(os.getenv("EVENT_CLASS_CACHE_TTL_SECONDS", "900"))
@@ -39,10 +39,10 @@ IQSMS_FORM_FIELDS_CACHE_TTL_SECONDS = int(os.getenv("IQSMS_FORM_FIELDS_CACHE_TTL
 ECID_FORM_MAP_PATH = os.getenv("ECID_FORM_MAP_PATH", str(Path(__file__).with_name("c365_ecid.csv")))
 ECID_FORM_MAP_TTL_SECONDS = int(os.getenv("ECID_FORM_MAP_TTL_SECONDS", "3600"))
 
-AIRPORT_CSV_FILENAME = "iata-icao.csv"
-DEFAULT_AIRPORT_RELATIVE = Path("ASQS") / "07. Development" / "API" / "Airport Data" / AIRPORT_CSV_FILENAME
-AIRPORT_ENABLE_FILENAME_SEARCH = os.getenv("AIRPORT_ENABLE_FILENAME_SEARCH", "").strip() == "1"
-AIRPORT_SEARCH_MAX_DEPTH = int(os.getenv("AIRPORT_SEARCH_MAX_DEPTH", "6"))
+# =============================================================================
+# Airport CSV now lives next to this script
+# =============================================================================
+AIRPORT_CSV_FILENAME = "icao-iata.csv"  # <- renamed and colocated
 
 FIELD_DEFAULTS_JSON = os.getenv("IQSMS_FIELD_DEFAULTS_JSON", "").strip()
 FALLBACK_FIELD_DEFAULTS = {
@@ -149,101 +149,14 @@ def form_id_for_event_classification(ecid: int) -> int:
 
 
 # =============================================================================
-# Airport CSV discovery + load (cached)
+# Airport CSV discovery + load (cached) — simplified
 # =============================================================================
-def candidate_onedrive_roots() -> list[Path]:
-    roots: list[Path] = []
-    for key in ("OneDriveCommercial", "OneDriveConsumer", "OneDrive"):
-        p = os.getenv(key)
-        if p:
-            roots.append(Path(p).expanduser())
-
-    home = Path.home()
-    cloud_storage = home / "Library" / "CloudStorage"
-    if cloud_storage.exists():
-        roots.extend([p for p in cloud_storage.glob("OneDrive*") if p.is_dir()])
-    roots.extend([p for p in home.glob("OneDrive*") if p.is_dir()])
-
-    seen = set()
-    uniq = []
-    for r in roots:
-        rr = r.resolve() if r.exists() else r
-        if rr not in seen:
-            seen.add(rr)
-            uniq.append(rr)
-    return uniq
-
-
-def candidate_icloud_roots() -> list[Path]:
-    home = Path.home()
-    roots: list[Path] = []
-
-    md = home / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
-    if md.exists():
-        roots.append(md)
-
-    cs = home / "Library" / "CloudStorage"
-    if cs.exists():
-        roots.extend([p for p in cs.glob("iCloud*") if p.is_dir()])
-
-    seen = set()
-    uniq = []
-    for r in roots:
-        rr = r.resolve() if r.exists() else r
-        if rr not in seen:
-            seen.add(rr)
-            uniq.append(rr)
-    return uniq
-
-
-def search_filename_limited_depth(root: Path, filename: str, max_depth: int = 6) -> Path | None:
-    if not root.exists():
-        return None
-    queue: list[tuple[Path, int]] = [(root, 0)]
-    while queue:
-        current, depth = queue.pop(0)
-        try:
-            for child in current.iterdir():
-                if child.is_file() and child.name == filename:
-                    return child
-                if child.is_dir() and depth < max_depth:
-                    if child.name in {".git", ".venv", "node_modules"}:
-                        continue
-                    queue.append((child, depth + 1))
-        except (PermissionError, FileNotFoundError):
-            continue
-    return None
-
-
 def find_airport_csv_path() -> Path | None:
-    override = os.getenv("AIRPORT_CSV_PATH")
-    if override:
-        p = Path(override).expanduser()
-        return p if p.exists() else None
-
-    rel = Path(os.getenv("AIRPORT_RELATIVE_PATH", str(DEFAULT_AIRPORT_RELATIVE)))
-
-    for root in candidate_onedrive_roots():
-        p = root / rel
-        if p.exists():
-            return p
-
-    for root in candidate_icloud_roots():
-        p = root / rel
-        if p.exists():
-            return p
-
-    if AIRPORT_ENABLE_FILENAME_SEARCH:
-        for root in candidate_onedrive_roots():
-            found = search_filename_limited_depth(root, AIRPORT_CSV_FILENAME, max_depth=AIRPORT_SEARCH_MAX_DEPTH)
-            if found:
-                return found
-        for root in candidate_icloud_roots():
-            found = search_filename_limited_depth(root, AIRPORT_CSV_FILENAME, max_depth=AIRPORT_SEARCH_MAX_DEPTH)
-            if found:
-                return found
-
-    return None
+    """
+    Return the path to the airport CSV that lives next to this script.
+    """
+    p = Path(__file__).with_name(AIRPORT_CSV_FILENAME)
+    return p if p.exists() else None
 
 
 def _norm_header(h: str) -> str:
@@ -319,6 +232,8 @@ def get_airports_cached() -> tuple[list[tuple[str, str, str]], dict[str, str], d
     if p and p.exists():
         airport_search, iata_to_label, icao_to_iata = load_airports_from_csv(str(p))
         return airport_search, iata_to_label, icao_to_iata, str(p)
+    # Helpful hint for operators if the file is missing
+    st.warning(f"Airport CSV not found next to script: {AIRPORT_CSV_FILENAME}")
     return [], {}, {}, ""
 
 
@@ -391,7 +306,7 @@ def fetch_event_classifications_all_pages() -> dict:
         raise RuntimeError("Missing IQSMS_API_KEY environment variable.")
 
     headers = {"api-key": API_KEY, "Accept": "application/json"}
-    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground &amp; Cargo Safety Report"
+    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground &amp;amp; Cargo Safety Report"
 
     params = {"kind-of-report": kor, "limit": EVENT_CLASS_PAGE_SIZE, "page[number]": 1}
     resp = requests.get(EVENT_CLASS_URL, headers=headers, params=params, timeout=30)
@@ -470,7 +385,7 @@ def normalize_event_classifications(raw: dict) -> tuple[list[dict], dict[int, st
         typ = clean(rec.get("typeOfOccurrence"), "Unknown type")
         cls = clean(rec.get("eventClassification"), "Unknown classification")
 
-        path = f"{area} > {typ} > {cls}"
+        path = f"{area} &gt; {typ} &gt; {cls}"
 
         selectable_ids.add(event_id)
         by_id[event_id] = path
@@ -522,10 +437,10 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         "Airport of Occurrence": "AirportOccurrence",
         "Location on aerodrome": "AerodromeLocation",
         "Diversion (if applicable)": "Diversion",
-        "Date & Time of Event (UTC)": "DateTimeUTC",
-        "Date & Time of Event (Local)": "DateTimeLocal",
         "Date &amp; Time of Event (UTC)": "DateTimeUTC",
         "Date &amp; Time of Event (Local)": "DateTimeLocal",
+        "Date &amp;amp; Time of Event (UTC)": "DateTimeUTC",
+        "Date &amp;amp; Time of Event (Local)": "DateTimeLocal",
         "Flight Number": "FlightNumber",
         "Call Sign": "CallSign",
         "Inflight Return": "InflightReturn",
