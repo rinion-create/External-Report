@@ -42,7 +42,7 @@ ECID_FORM_MAP_TTL_SECONDS = int(os.getenv("ECID_FORM_MAP_TTL_SECONDS", "3600"))
 # =============================================================================
 # Airport CSV now lives next to this script
 # =============================================================================
-AIRPORT_CSV_FILENAME = os.getenv("AIRPORT_FORM_MAP_PATH", str(Path(__file__).with_name("icao-iata.csv")))
+AIRPORT_CSV_FILENAME = os.getenv("AIRPORT_FORM_MAP_PATH", str(Path(__file__).with_name("iata-icao.csv")))
 
 FIELD_DEFAULTS_JSON = os.getenv("IQSMS_FIELD_DEFAULTS_JSON", "").strip()
 FALLBACK_FIELD_DEFAULTS = {
