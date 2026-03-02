@@ -306,7 +306,7 @@ def fetch_event_classifications_all_pages() -> dict:
         raise RuntimeError("Missing IQSMS_API_KEY environment variable.")
 
     headers = {"api-key": API_KEY, "Accept": "application/json"}
-    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground &amp;amp; Cargo Safety Report"
+    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground & Cargo Safety Report"
 
     params = {"kind-of-report": kor, "limit": EVENT_CLASS_PAGE_SIZE, "page[number]": 1}
     resp = requests.get(EVENT_CLASS_URL, headers=headers, params=params, timeout=30)
