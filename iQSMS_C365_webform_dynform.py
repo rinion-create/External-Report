@@ -27,7 +27,7 @@ FORMS_URL = os.getenv(
 )
 
 FORM_ID = int(os.getenv("IQSMS_FORM_ID", "2149"))
-API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or "xTWPwWr4qHB9TXvwDNopqFvRvvQTZIWL"
+API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or ""
 DEFAULT_CREATOR_ID = int(os.getenv("IQSMS_CREATOR_ID", "141"))
 FORM_PASSWORD = os.getenv("FORM_PASSWORD", "123")
 KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground &amp; Cargo Safety Report").strip()
