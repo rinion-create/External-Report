@@ -5,10 +5,11 @@ import html
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 import requests
 import streamlit as st
+
 
 # =============================================================================
 # CONFIG (env vars)
@@ -26,7 +27,7 @@ FORMS_URL = os.getenv(
     "https://comply365.asqs.net/iqsms/api/stable/reporting/forms"
 )
 
-FORM_ID = int(os.getenv("IQSMS_FORM_ID", "2149"))
+# NOTE: No ECID→FormID mapping anymore; we use the selected event classification ID (lfnr) directly.
 API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or ""
 DEFAULT_CREATOR_ID = int(os.getenv("IQSMS_CREATOR_ID", "141"))
 FORM_PASSWORD = os.getenv("FORM_PASSWORD", "123")
@@ -36,12 +37,7 @@ EVENT_CLASS_PAGE_SIZE = int(os.getenv("IQSMS_EVENT_CLASS_PAGE_SIZE", "200"))
 EVENT_CLASS_CACHE_TTL_SECONDS = int(os.getenv("EVENT_CLASS_CACHE_TTL_SECONDS", "900"))
 IQSMS_FORM_FIELDS_CACHE_TTL_SECONDS = int(os.getenv("IQSMS_FORM_FIELDS_CACHE_TTL_SECONDS", "900"))
 
-ECID_FORM_MAP_PATH = os.getenv("ECID_FORM_MAP_PATH", str(Path(__file__).with_name("c365_ecid.csv")))
-ECID_FORM_MAP_TTL_SECONDS = int(os.getenv("ECID_FORM_MAP_TTL_SECONDS", "3600"))
-
-# =============================================================================
 # Airport CSV now lives next to this script
-# =============================================================================
 AIRPORT_CSV_FILENAME = "iata-icao.csv"
 
 FIELD_DEFAULTS_JSON = os.getenv("IQSMS_FIELD_DEFAULTS_JSON", "").strip()
@@ -74,8 +70,8 @@ def get_field_defaults_map() -> dict[str, Any]:
 
 
 def _dedupe_preserve_order(seq: list[str]) -> list[str]:
-    seen = set()
-    out = []
+    seen: set[str] = set()
+    out: list[str] = []
     for x in seq:
         if x in seen:
             continue
@@ -98,54 +94,6 @@ def _append_value(values: list, name: str, value: Any):
     if _is_empty_value(value):
         return
     values.append({"name": name, "value": value})
-
-
-# =============================================================================
-# ECID -> FormID mapping (cached)
-# =============================================================================
-def load_ecid_form_map(path: str) -> dict[int, int]:
-    p = Path(path).expanduser()
-    if not p.exists():
-        return {}
-
-    mapping: dict[int, int] = {}
-    with open(p, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        if not reader.fieldnames:
-            return {}
-
-        def norm(h: str) -> str:
-            return (h or "").strip().lower().replace(" ", "_")
-
-        fields = {norm(h): h for h in reader.fieldnames}
-        ecid_key = fields.get("lfnr")
-        form_key = fields.get("form_id")
-
-        if not ecid_key or not form_key:
-            raise RuntimeError(
-                f"Unexpected ECID mapping headers: {reader.fieldnames} "
-                f"(expected something like 'lfnr;form_id')"
-            )
-
-        for row in reader:
-            try:
-                ecid = int(str(row.get(ecid_key, "")).strip())
-                fid = int(str(row.get(form_key, "")).strip())
-            except Exception:
-                continue
-            mapping[ecid] = fid
-
-    return mapping
-
-
-@st.cache_data(ttl=ECID_FORM_MAP_TTL_SECONDS)
-def get_ecid_form_map_cached(path: str) -> dict[int, int]:
-    return load_ecid_form_map(path)
-
-
-def form_id_for_event_classification(ecid: int) -> int:
-    mp = get_ecid_form_map_cached(ECID_FORM_MAP_PATH)
-    return int(mp.get(int(ecid), FORM_ID))
 
 
 # =============================================================================
@@ -193,7 +141,7 @@ def load_airports_from_csv(path: str) -> tuple[list[tuple[str, str, str]], dict[
 
         for row in reader:
             iata = (get(row, "iata") or get(row, "iata_code") or get(row, "iata3")).strip().upper()
-            if not re.fullmatch(r"[A-Z]{3}", iata):
+            if not IATA_RE.fullmatch(iata):
                 continue
 
             icao = (
@@ -247,18 +195,22 @@ def resolve_airport_to_iata(raw: str) -> str:
     if not airport_search:
         return q if IATA_RE.fullmatch(q) else ""
 
+    # Exact valid IATA
     if IATA_RE.fullmatch(q) and q in iata_to_label:
         return q
 
+    # Exact valid ICAO mapped to IATA
     if ICAO_RE.fullmatch(q):
         mapped = icao_to_iata.get(q, "")
         if mapped:
             return mapped
 
+    # Prefix IATA match
     for iata, _lbl, _lbl_upper in airport_search:
         if iata.startswith(q):
             return iata
 
+    # Label contains query
     for iata, _lbl, lbl_upper in airport_search:
         if q in lbl_upper:
             return iata
@@ -273,22 +225,26 @@ def airport_suggestions(query: str, limit: int = 20) -> list[str]:
     q = query.upper()
 
     airport_search, iata_to_label, icao_to_iata, _path = get_airports_cached()
-    out = []
+    out: list[str] = []
 
+    # Exact IATA known
     if IATA_RE.fullmatch(q) and q in iata_to_label:
         return [f"{q} — {iata_to_label[q]}"]
 
+    # Exact ICAO mapped
     if ICAO_RE.fullmatch(q):
         mapped = icao_to_iata.get(q, "")
         if mapped:
             return [f"{mapped} — {iata_to_label.get(mapped, mapped)}"]
 
+    # IATA prefix
     for iata, lbl, _lbl_upper in airport_search:
         if iata.startswith(q):
             out.append(f"{iata} — {lbl}")
             if len(out) >= limit:
                 return out
 
+    # Label contains
     for iata, lbl, lbl_upper in airport_search:
         if q in lbl_upper:
             out.append(f"{iata} — {lbl}")
@@ -296,6 +252,32 @@ def airport_suggestions(query: str, limit: int = 20) -> list[str]:
                 break
 
     return out
+
+
+def try_autoconfirm_airport(query: str) -> Tuple[str, bool]:
+    """
+    Returns (iata, autoconfirmed).
+    - If query is an exact, known IATA (AAA) -> autoconfirm True.
+    - If query is an exact, known ICAO (AAAA) -> autoconfirm True (mapped).
+    - Otherwise -> ("", False)
+    """
+    q = (query or "").strip().upper()
+    if not q:
+        return "", False
+
+    _search, iata_to_label, icao_to_iata, _path = get_airports_cached()
+
+    # Exact IATA known
+    if IATA_RE.fullmatch(q) and q in iata_to_label:
+        return q, True
+
+    # Exact ICAO mapped
+    if ICAO_RE.fullmatch(q):
+        mapped = icao_to_iata.get(q, "")
+        if mapped:
+            return mapped, True
+
+    return "", False
 
 
 # =============================================================================
@@ -358,8 +340,6 @@ def normalize_event_classifications(raw: dict) -> tuple[list[dict], dict[int, st
     if not isinstance(data, list):
         data = []
 
-    root_label = html.unescape(KIND_OF_REPORT).strip() or "Kind of report"
-
     def clean(v: object, fallback: str) -> str:
         s = ("" if v is None else str(v)).strip()
         return s if s else fallback
@@ -407,13 +387,17 @@ def get_event_classifications_cached() -> tuple[list[dict], dict[int, str], set[
 
 
 # =============================================================================
-# Dynamic forms schema (cached per form_id)
+# Dynamic form schema (cached per lfnr)
 # =============================================================================
-def fetch_form_schema(form_id: int) -> dict:
+def fetch_form_schema(lfnr: int) -> dict:
+    """
+    Fetch the dynamic form schema for a given lfnr.
+    (The forms endpoint is addressed by the same lfnr used for the event classification.)
+    """
     if not API_KEY:
         raise RuntimeError("Missing IQSMS_API_KEY environment variable.")
     headers = {"api-key": API_KEY, "Accept": "application/json"}
-    url = f"{FORMS_URL.rstrip('/')}/{form_id}"
+    url = f"{FORMS_URL.rstrip('/')}/{lfnr}"
     resp = requests.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
     out = resp.json()
@@ -428,6 +412,7 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
     if not isinstance(raw_fields, list):
         raw_fields = []
 
+    # Map known payload field names to internal names
     name_map = {
         "Title": "Title",
         "Aircraft Registration": "AircraftReg",
@@ -441,6 +426,10 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         "Date &amp; Time of Event (Local)": "DateTimeLocal",
         "Date &amp;amp; Time of Event (UTC)": "DateTimeUTC",
         "Date &amp;amp; Time of Event (Local)": "DateTimeLocal",
+        "Date &amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
+        "Date &amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
+        "Date &amp;amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
+        "Date &amp;amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
         "Flight Number": "FlightNumber",
         "Call Sign": "CallSign",
         "Inflight Return": "InflightReturn",
@@ -535,11 +524,13 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
 
         out.append(field_def)
 
+    # Enforce Report Text field to be required textarea
     for f in out:
         if f.get("name") == "ReportText" or f.get("payload_name") == "Report Text":
             f["required"] = True
             f["type"] = "textarea"
 
+    # Default title if none present
     for f in out:
         if f.get("name") == "Title" and not f.get("default"):
             f["default"] = "External Ground Ops Report"
@@ -548,9 +539,9 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
 
 
 @st.cache_data(ttl=IQSMS_FORM_FIELDS_CACHE_TTL_SECONDS)
-def get_form_fields_cached(form_id: int) -> tuple[list[dict], bool]:
+def get_form_fields_cached(lfnr: int) -> tuple[list[dict], bool]:
     try:
-        schema = fetch_form_schema(form_id)
+        schema = fetch_form_schema(int(lfnr))
         fields, anon_default = normalize_fields_from_schema(schema)
         if not fields:
             raise RuntimeError("No fields extracted from schema.")
@@ -593,13 +584,315 @@ st.set_page_config(page_title="SafetyManager365 External Ground Ops Report", lay
 st.title("SafetyManager365")
 st.subheader("External Ground Ops Report")
 
+# -------------------- Comply365 Light/Dark Theme Switch ----------------------
+if "theme" not in st.session_state:
+    st.session_state.theme = "light"
+
+toggle = st.toggle("🌗 Dark Mode", value=(st.session_state.theme == "dark"))
+st.session_state.theme = "dark" if toggle else "light"
+
+def apply_c365_theme():
+    if st.session_state.theme == "dark":
+        st.markdown("""
+<style>
+/* ---------------------------------------------------------
+   DARK MODE — Comply365 Branding
+--------------------------------------------------------- */
+
+/* App background and base text */
+.stApp {
+    background-color: #003B5C !important; /* Dark Navy */
+    color: #FFFFFF !important;
+}
+
+/* Apply consistent styling to ALL buttons everywhere */
+.stButton > button,
+form .stButton > button {
+    background-color: #0077C8 !important;   /* Comply365 blue */
+    color: #FFFFFF !important;
+    border-radius: 6px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Hover effect */
+.stButton > button:hover,
+form .stButton > button:hover {
+    background-color: #3399E6 !important;   /* lighter blue */
+    color: #FFFFFF !important;
+}
+
+/* BaseWeb primary-kind override (sometimes injected later) */
+button[kind="primary"],
+form button[kind="primary"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+
+/* Hash-based class fallback */
+button[class*="css"],
+form button[class*="css"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+
+/* Headers + Labels */
+h1, h2, h3, h4, h5, h6,
+label, .stMarkdown, .stText,
+.stSelectbox label, .stMultiselect label {
+    color: #FFFFFF !important;
+}
+
+/* Tabs visibility (active + inactive) */
+.stTabs [role="tab"] {
+    color: #FFFFFF !important;               /* inactive */
+}
+.stTabs [data-baseweb="tab-highlight"] {
+    color: #FFFFFF !important;               /* active text */
+    border-color: #0077C8 !important;        /* C365 blue underline */
+}
+
+/* Inputs: text + textarea + select (matching background) */
+input, textarea, select,
+.stTextInput > div > div > input,
+.stTextArea textarea {
+    background-color: #0E1E2C !important;
+    color: #FFFFFF !important;
+    border: 1px solid #0077C8 !important;
+}
+
+/* Force st.text_input text + placeholder colors */
+.stTextInput > div > div > input { color: #FFFFFF !important; }
+.stTextInput > div > div > input::placeholder { color: #B0C4D8 !important; }
+
+/* Selectbox / Multiselect control background + text (match inputs) */
+div[data-baseweb="select"] > div {
+    background-color: #0E1E2C !important;
+    color: #FFFFFF !important;
+    border-color: #0077C8 !important;
+}
+
+/* Dropdown list menu */
+ul[role="listbox"] {
+    background-color: #0E1E2C !important;
+    color: #FFFFFF !important;
+}
+
+/* Buttons — Force Comply365 blue across all states */
+.stButton > button,
+.stButton > button:active,
+.stButton > button:focus,
+.stButton > button:visited {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+    border-radius: 6px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.stButton > button:hover {
+    background-color: #3399E6 !important;
+    color: #FFFFFF !important;
+}
+/* Override BaseWeb layers just in case */
+button[kind="primary"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+button[class*="css"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+
+/* Captions and helper text */
+.stCaption, .stMarkdown small {
+    color: #D7DDE2 !important;
+}
+
+/* Alerts readable */
+.stAlert, .stAlert > div { color: #FFFFFF !important; }
+
+/* ===== Fix Streamlit form submit button (dark) ===== */
+div[data-testid="stFormSubmitButton"] > button {
+    background-color: #0077C8 !important; /* Comply365 blue */
+    color: #FFFFFF !important;
+    border-radius: 6px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+div[data-testid="stFormSubmitButton"] > button:hover {
+    background-color: #3399E6 !important;
+    color: #FFFFFF !important;
+}
+div[data-testid="stFormSubmitButton"] > button:active,
+div[data-testid="stFormSubmitButton"] > button:focus {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+div[data-testid="stFormSubmitButton"] > button:disabled {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+    opacity: 0.6 !important;
+}
+/* BaseWeb fallback (sometimes applied after user CSS) */
+div[data-testid="stFormSubmitButton"] [data-baseweb="button"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+
+/* Scoped catch-all for any button inside the form footer region */
+form [data-testid="stFormSubmitButton"] button[class*="css"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+</style>
+        """, unsafe_allow_html=True)
+
+    else:
+        st.markdown("""
+<style>
+/* ---------------------------------------------------------
+   LIGHT MODE — Comply365 Branding
+--------------------------------------------------------- */
+
+.stApp {
+    background-color: #F5F7FA !important; /* Light Gray */
+    color: #1A1A1A !important;
+}
+
+/* Apply consistent styling to ALL buttons everywhere */
+.stButton > button,
+form .stButton > button {
+    background-color: #0077C8 !important;   /* Comply365 blue */
+    color: #FFFFFF !important;
+    border-radius: 6px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Hover effect */
+.stButton > button:hover,
+form .stButton > button:hover {
+    background-color: #3399E6 !important;   /* lighter blue */
+    color: #FFFFFF !important;
+}
+
+/* BaseWeb primary-kind override (sometimes injected later) */
+button[kind="primary"],
+form button[kind="primary"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+
+/* Hash-based class fallback */
+button[class*="css"],
+form button[class*="css"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+
+/* Labels + text */
+label, .stText, .stMarkdown,
+.stSelectbox label, .stMultiselect label {
+    color: #1A1A1A !important;
+}
+
+/* Tabs */
+.stTabs [role="tab"] {
+    color: #1A1A1A !important;
+}
+.stTabs [data-baseweb="tab-highlight"] {
+    color: #1A1A1A !important;
+    border-color: #0077C8 !important;
+}
+
+/* Inputs */
+input, textarea, select,
+.stTextInput > div > div > input,
+.stTextArea textarea {
+    background-color: #FFFFFF !important;
+    color: #1A1A1A !important;
+    border: 1px solid #D7DDE2 !important;
+}
+
+/* Select controls */
+div[data-baseweb="select"] > div {
+    background-color: #FFFFFF !important;
+    color: #1A1A1A !important;
+    border-color: #D7DDE2 !important;
+}
+ul[role="listbox"] {
+    background-color: #FFFFFF !important;
+    color: #1A1A1A !important;
+}
+
+/* Buttons */
+.stButton > button,
+.stButton > button:active,
+.stButton > button:focus,
+.stButton > button:visited {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+    border-radius: 6px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+.stButton > button:hover {
+    background-color: #005A99 !important;
+    color: #FFFFFF !important;
+}
+
+/* Captions */
+.stCaption, .stMarkdown small { color: #4A4A4A !important; }
+
+/* ===== Fix Streamlit form submit button (light) ===== */
+div[data-testid="stFormSubmitButton"] > button {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+    border-radius: 6px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+div[data-testid="stFormSubmitButton"] > button:hover {
+    background-color: #005A99 !important; /* your light hover */
+    color: #FFFFFF !important;
+}
+div[data-testid="stFormSubmitButton"] > button:active,
+div[data-testid="stFormSubmitButton"] > button:focus {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+div[data-testid="stFormSubmitButton"] > button:disabled {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+    opacity: 0.6 !important;
+}
+/* BaseWeb fallback (sometimes applied after user CSS) */
+div[data-testid="stFormSubmitButton"] [data-baseweb="button"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+
+/* Scoped catch-all for any button inside the form footer region */
+form [data-testid="stFormSubmitButton"] button[class*="css"] {
+    background-color: #0077C8 !important;
+    color: #FFFFFF !important;
+}
+</style>
+        """, unsafe_allow_html=True)
+
+apply_c365_theme()
+# -----------------------------------------------------------------------------
+
+
 # Init session
 if "unlocked" not in st.session_state:
     st.session_state.unlocked = False
-if "active_form_id" not in st.session_state:
-    st.session_state.active_form_id = FORM_ID
-if "selected_ecid" not in st.session_state:
-    st.session_state.selected_ecid = None
+if "selected_lfnr" not in st.session_state:
+    st.session_state.selected_lfnr = None
 if "selected_ec_path" not in st.session_state:
     st.session_state.selected_ec_path = ""
 
@@ -620,9 +913,8 @@ c = st.columns([3, 1])
 with c[1]:
     if st.button("Lock / Logout"):
         st.session_state.unlocked = False
-        st.session_state.selected_ecid = None
+        st.session_state.selected_lfnr = None
         st.session_state.selected_ec_path = ""
-        st.session_state.active_form_id = FORM_ID
         st.rerun()
 
 # API key required
@@ -649,9 +941,9 @@ with tab_search:
         options = [f"{m['id']} — {m['path']}" for m in matches]
         chosen = st.selectbox("Matches", options=options)
         if chosen:
-            chosen_id = int(chosen.split(" — ", 1)[0].strip())
-            st.session_state.selected_ecid = chosen_id
-            st.session_state.selected_ec_path = ec_by_id.get(chosen_id, "")
+            chosen_lfnr = int(chosen.split(" — ", 1)[0].strip())
+            st.session_state.selected_lfnr = chosen_lfnr
+            st.session_state.selected_ec_path = ec_by_id.get(chosen_lfnr, "")
     else:
         if len(q.strip()) >= 2:
             st.info("No matches.")
@@ -666,29 +958,23 @@ with tab_browse:
     if leaves:
         leaf_options = [f"{leaf_id} — {cls}" for (leaf_id, cls, _path) in leaves]
         chosen_leaf = st.selectbox("Event Classification", leaf_options)
-        chosen_id = int(chosen_leaf.split(" — ", 1)[0].strip())
-        st.session_state.selected_ecid = chosen_id
-        st.session_state.selected_ec_path = ec_by_id.get(chosen_id, "")
+        chosen_lfnr = int(chosen_leaf.split(" — ", 1)[0].strip())
+        st.session_state.selected_lfnr = chosen_lfnr
+        st.session_state.selected_ec_path = ec_by_id.get(chosen_lfnr, "")
     else:
         st.info("No classifications available for the selected Area/Type.")
 
-# Enforce ECID selected
-ecid = st.session_state.selected_ecid
-if not ecid:
+# Enforce lfnr selected
+lfnr = st.session_state.selected_lfnr
+if not lfnr:
     st.warning("Event Classification is required.")
     st.stop()
 
-# Resolve dynamic Form ID from ECID mapping
-resolved_form_id = form_id_for_event_classification(ecid)
-if resolved_form_id != st.session_state.active_form_id:
-    st.session_state.active_form_id = resolved_form_id
-    st.rerun()
-
-# Load fields for active form
-with st.spinner(f"Loading form schema (Form ID {st.session_state.active_form_id})…"):
-    fields, _anon_default = get_form_fields_cached(st.session_state.active_form_id)
+# Load fields for the lfnr (no mapping, direct usage)
+with st.spinner(f"Loading form schema (lfnr {lfnr})…"):
+    fields, _anon_default = get_form_fields_cached(int(lfnr))
 defaults = build_defaults(fields)
-st.caption(f"Loaded form for lfnr: **{st.session_state.active_form_id}**")
+st.caption(f"Loaded form for lfnr: **{lfnr}**")
 
 
 # =============================================================================
@@ -709,6 +995,16 @@ def render_datetime_field(label: str, key: str, default_dt: datetime) -> datetim
 
 def render_airport_field(label: str, key: str, required: bool) -> str:
     q = st.text_input(label, key=key + "_query", placeholder="e.g. VIE, LOWW, Vienna")
+
+    # Auto-confirm exact IATA/ICAO when unambiguous
+    iata_auto, autoconfirmed = try_autoconfirm_airport(q)
+    if autoconfirmed:
+        if required and not iata_auto:
+            st.error(f"{label} is required and must resolve to a valid IATA code.")
+        st.caption(f"✔ {label} recognized as **{iata_auto}**")
+        return iata_auto
+
+    # Fallback to suggestion-driven resolution
     suggestions = airport_suggestions(q, limit=20)
     choice = None
     if suggestions:
@@ -726,14 +1022,13 @@ def render_airport_field(label: str, key: str, required: bool) -> str:
 
 with st.form("report_form", clear_on_submit=False):
     values_by_internal: dict[str, Any] = {}
-    values_by_internal["eventClassificationId"] = int(ecid)
+    values_by_internal["eventClassificationId"] = int(lfnr)
 
     # -----------------------------
     # 2) Report Text (DEDICATED)
     # -----------------------------
     st.markdown("## 2) Report Text")
-    rt_box = st.container(border=True) if "border" in st.container.__code__.co_varnames else st.container()
-    with rt_box:
+    with st.container():
         st.markdown("### Report Text *")
         report_text = st.text_area(
             " ",
@@ -747,8 +1042,7 @@ with st.form("report_form", clear_on_submit=False):
     # 3) Report Details
     # -----------------------------
     st.markdown("## 3) Report Details")
-    details_box = st.container(border=True) if "border" in st.container.__code__.co_varnames else st.container()
-    with details_box:
+    with st.container():
         for f in fields:
             if f["name"] in ("eventClassificationId", "ReportText"):
                 continue
@@ -803,14 +1097,14 @@ with st.form("report_form", clear_on_submit=False):
                 v = st.text_input(label, value=str(defaults.get(key, "")), key=key)
                 values_by_internal[key] = v.strip() if isinstance(v, str) else v
 
-    submitted = st.form_submit_button("Submit report")
+    submitted = st.form_submit_button("Submit Report")
 
 
 # =============================================================================
 # SUBMIT
 # =============================================================================
 if submitted:
-    if int(ecid) not in ec_selectable_ids:
+    if int(lfnr) not in ec_selectable_ids:
         st.error("Please select a valid tier-4 Event Classification (leaf).")
         st.stop()
 
@@ -874,8 +1168,8 @@ if submitted:
         _append_value(payload_values, payload_name, val)
 
     payload = {
-        "eventClassificationId": int(ecid),
-        "anonymous": False,  # ALWAYS FORCE FALSE
+        "eventClassificationId": int(lfnr),  # lfnr used directly
+        "anonymous": False,                   # ALWAYS FORCE FALSE
         "creator": int(DEFAULT_CREATOR_ID),
         "values": payload_values,
     }
