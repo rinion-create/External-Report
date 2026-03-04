@@ -10,7 +10,6 @@ from typing import Any, Tuple
 import requests
 import streamlit as st
 
-
 # =============================================================================
 # CONFIG (env vars)
 # =============================================================================
@@ -100,9 +99,7 @@ def _append_value(values: list, name: str, value: Any):
 # Airport CSV discovery + load (cached)
 # =============================================================================
 def find_airport_csv_path() -> Path | None:
-    """
-    Return the path to the airport CSV that lives next to this script.
-    """
+    """Return the path to the airport CSV that lives next to this script."""
     p = Path(__file__).with_name(AIRPORT_CSV_FILENAME)
     return p if p.exists() else None
 
@@ -180,7 +177,6 @@ def get_airports_cached() -> tuple[list[tuple[str, str, str]], dict[str, str], d
     if p and p.exists():
         airport_search, iata_to_label, icao_to_iata = load_airports_from_csv(str(p))
         return airport_search, iata_to_label, icao_to_iata, str(p)
-    # Helpful hint for operators if the file is missing
     st.warning(f"Airport CSV not found next to script: {AIRPORT_CSV_FILENAME}")
     return [], {}, {}, ""
 
@@ -466,7 +462,7 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         "hint": "",
     })
 
-    # ✅ Deduplicate by internal name to prevent duplicate widgets (esp. DateTimeUTC/Local)
+    # ✅ Deduplicate by internal name; also apply robust datetime bucketing
     seen_internal: set[str] = set()
 
     for rf in raw_fields:
@@ -485,6 +481,7 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         multiple = bool(rf.get("multiple", False))
         regex = rf.get("regex")
 
+        # Type inference
         if payload_name in ("Departure", "Destination"):
             ftype = "iata"
         elif "Date" in label and "Time" in label:
@@ -494,9 +491,18 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         else:
             ftype = "text"
 
+        # Internal name: map known → internal; otherwise a sanitized label
         internal_name = name_map.get(payload_name)
         if not internal_name:
             internal_name = re.sub(r"[^A-Za-z0-9_]", "", re.sub(r"\s+", "_", label)).strip("_") or "Field"
+
+        # Extra safety: collapse any "(UTC)" datetime into DateTimeUTC; any "(Local)" into DateTimeLocal
+        if ftype == "datetime":
+            lab_low = label.lower()
+            if "(utc" in lab_low or " utc" in lab_low:
+                internal_name = "DateTimeUTC"
+            elif "(local" in lab_low or " local" in lab_low:
+                internal_name = "DateTimeLocal"
 
         # Skip duplicates with same internal name
         if internal_name in seen_internal:
@@ -575,16 +581,25 @@ def get_form_fields_cached(lfnr: int) -> tuple[list[dict], bool]:
         return fallback, False
 
 
-def build_defaults(fields: list[dict]) -> dict[str, Any]:
+def _build_defaults_once(lfnr: int, fields: list[dict]) -> dict[str, Any]:
+    """
+    Build defaults only once per lfnr and keep them in session_state to avoid
+    value 'thrash' (e.g., datetime defaults changing every rerun).
+    """
+    ns = f"_defaults_for_lfnr_{lfnr}"
+    if ns in st.session_state:
+        return st.session_state[ns]
+
     defaults: dict[str, Any] = {}
     for f in fields:
         if f["type"] == "datetime":
-            defaults[f["name"]] = _now_utc()  # tz-aware; we’ll pass naive time to st.time_input
+            defaults[f["name"]] = _now_utc()  # tz-aware but will be split to naive time for the widget
         elif f["type"] == "multiselect":
             defaults[f["name"]] = f.get("default", [])
         else:
             defaults[f["name"]] = f.get("default", "")
     defaults["eventClassificationId"] = ""
+    st.session_state[ns] = defaults
     return defaults
 
 
@@ -603,295 +618,74 @@ toggle = st.toggle("🌗 Dark Mode", value=(st.session_state.theme == "dark"))
 st.session_state.theme = "dark" if toggle else "light"
 
 def apply_c365_theme():
+    # NOTE: intentionally NOT overriding BaseWeb Select internals to avoid any measurement/update loops.
     if st.session_state.theme == "dark":
         st.markdown("""
 <style>
 /* ---------------------------------------------------------
    DARK MODE — Comply365 Branding
 --------------------------------------------------------- */
+.stApp { background-color: #003B5C !important; color: #FFFFFF !important; }
 
-/* App background and base text */
-.stApp {
-    background-color: #003B5C !important; /* Dark Navy */
-    color: #FFFFFF !important;
+/* Buttons */
+.stButton > button, form .stButton > button {
+  background-color: #0077C8 !important; color: #FFFFFF !important;
+  border-radius: 6px !important; border: none !important; box-shadow: none !important;
 }
+.stButton > button:hover, form .stButton > button:hover { background-color: #3399E6 !important; }
 
-/* Apply consistent styling to ALL buttons everywhere */
-.stButton > button,
-form .stButton > button {
-    background-color: #0077C8 !important;   /* Comply365 blue */
-    color: #FFFFFF !important;
-    border-radius: 6px !important;
-    border: none !important;
-    box-shadow: none !important;
-}
+/* Headers + text */
+h1, h2, h3, h4, h5, h6, label, .stMarkdown, .stText,
+.stSelectbox label, .stMultiselect label { color: #FFFFFF !important; }
 
-/* Hover effect */
-.stButton > button:hover,
-form .stButton > button:hover {
-    background-color: #3399E6 !important;   /* lighter blue */
-    color: #FFFFFF !important;
-}
-
-/* BaseWeb primary-kind override (sometimes injected later) */
-button[kind="primary"],
-form button[kind="primary"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-
-/* Hash-based class fallback */
-button[class*="css"],
-form button[class*="css"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-
-/* Headers + Labels */
-h1, h2, h3, h4, h5, h6,
-label, .stMarkdown, .stText,
-.stSelectbox label, .stMultiselect label {
-    color: #FFFFFF !important;
-}
-
-/* Tabs visibility (active + inactive) */
-.stTabs [role="tab"] {
-    color: #FFFFFF !important;               /* inactive */
-}
-.stTabs [data-baseweb="tab-highlight"] {
-    color: #FFFFFF !important;               /* active text */
-    border-color: #0077C8 !important;        /* C365 blue underline */
-}
-
-/* Inputs: text + textarea + select (matching background) */
-input, textarea, select,
+/* Inputs: text + textarea */
 .stTextInput > div > div > input,
 .stTextArea textarea {
-    background-color: #0E1E2C !important;
-    color: #FFFFFF !important;
-    border: 1px solid #0077C8 !important;
+  background-color: #0E1E2C !important; color: #FFFFFF !important; border: 1px solid #0077C8 !important;
 }
-
-/* Force st.text_input text + placeholder colors */
-.stTextInput > div > div > input { color: #FFFFFF !important; }
 .stTextInput > div > div > input::placeholder { color: #B0C4D8 !important; }
 
-/* Selectbox / Multiselect control background + text (match inputs) */
-div[data-baseweb="select"] > div {
-    background-color: #0E1E2C !important;
-    color: #FFFFFF !important;
-    border-color: #0077C8 !important;
-}
-
-/* Dropdown list menu */
-ul[role="listbox"] {
-    background-color: #0E1E2C !important;
-    color: #FFFFFF !important;
-}
-
-/* Buttons — Force Comply365 blue across all states */
-.stButton > button,
-.stButton > button:active,
-.stButton > button:focus,
-.stButton > button:visited {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-    border-radius: 6px !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-.stButton > button:hover {
-    background-color: #3399E6 !important;
-    color: #FFFFFF !important;
-}
-/* Override BaseWeb layers just in case */
-button[kind="primary"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-button[class*="css"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-
-/* Captions and helper text */
-.stCaption, .stMarkdown small {
-    color: #D7DDE2 !important;
-}
-
-/* Alerts readable */
+/* Alerts */
 .stAlert, .stAlert > div { color: #FFFFFF !important; }
 
-/* ===== Fix Streamlit form submit button (dark) ===== */
+/* ===== Submit button ===== */
 div[data-testid="stFormSubmitButton"] > button {
-    background-color: #0077C8 !important; /* Comply365 blue */
-    color: #FFFFFF !important;
-    border-radius: 6px !important;
-    border: none !important;
-    box-shadow: none !important;
+  background-color: #0077C8 !important; color: #FFFFFF !important;
+  border-radius: 6px !important; border: none !important; box-shadow: none !important;
 }
-div[data-testid="stFormSubmitButton"] > button:hover {
-    background-color: #3399E6 !important;
-    color: #FFFFFF !important;
-}
-div[data-testid="stFormSubmitButton"] > button:active,
-div[data-testid="stFormSubmitButton"] > button:focus {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-    outline: none !important;
-    box-shadow: none !important;
-}
-div[data-testid="stFormSubmitButton"] > button:disabled {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-    opacity: 0.6 !important;
-}
-/* BaseWeb fallback (sometimes applied after user CSS) */
-div[data-testid="stFormSubmitButton"] [data-baseweb="button"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-
-/* Scoped catch-all for any button inside the form footer region */
-form [data-testid="stFormSubmitButton"] button[class*="css"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
+div[data-testid="stFormSubmitButton"] > button:hover { background-color: #3399E6 !important; }
 </style>
         """, unsafe_allow_html=True)
-
     else:
         st.markdown("""
 <style>
 /* ---------------------------------------------------------
    LIGHT MODE — Comply365 Branding
 --------------------------------------------------------- */
-
-.stApp {
-    background-color: #F5F7FA !important; /* Light Gray */
-    color: #1A1A1A !important;
-}
-
-/* Apply consistent styling to ALL buttons everywhere */
-.stButton > button,
-form .stButton > button {
-    background-color: #0077C8 !important;   /* Comply365 blue */
-    color: #FFFFFF !important;
-    border-radius: 6px !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-
-/* Hover effect */
-.stButton > button:hover,
-form .stButton > button:hover {
-    background-color: #3399E6 !important;   /* lighter blue */
-    color: #FFFFFF !important;
-}
-
-/* BaseWeb primary-kind override (sometimes injected later) */
-button[kind="primary"],
-form button[kind="primary"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-
-/* Hash-based class fallback */
-button[class*="css"],
-form button[class*="css"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-
-/* Labels + text */
-label, .stText, .stMarkdown,
-.stSelectbox label, .stMultiselect label {
-    color: #1A1A1A !important;
-}
-
-/* Tabs */
-.stTabs [role="tab"] {
-    color: #1A1A1A !important;
-}
-.stTabs [data-baseweb="tab-highlight"] {
-    color: #1A1A1A !important;
-    border-color: #0077C8 !important;
-}
-
-/* Inputs */
-input, textarea, select,
-.stTextInput > div > div > input,
-.stTextArea textarea {
-    background-color: #FFFFFF !important;
-    color: #1A1A1A !important;
-    border: 1px solid #D7DDE2 !important;
-}
-
-/* Select controls */
-div[data-baseweb="select"] > div {
-    background-color: #FFFFFF !important;
-    color: #1A1A1A !important;
-    border-color: #D7DDE2 !important;
-}
-ul[role="listbox"] {
-    background-color: #FFFFFF !important;
-    color: #1A1A1A !important;
-}
+.stApp { background-color: #F5F7FA !important; color: #1A1A1A !important; }
 
 /* Buttons */
-.stButton > button,
-.stButton > button:active,
-.stButton > button:focus,
-.stButton > button:visited {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-    border-radius: 6px !important;
-    border: none !important;
-    box-shadow: none !important;
+.stButton > button, form .stButton > button {
+  background-color: #0077C8 !important; color: #FFFFFF !important;
+  border-radius: 6px !important; border: none !important; box-shadow: none !important;
 }
-.stButton > button:hover {
-    background-color: #005A99 !important;
-    color: #FFFFFF !important;
+.stButton > button:hover, form .stButton > button:hover { background-color: #005A99 !important; }
+
+/* Labels + text */
+label, .stText, .stMarkdown, .stSelectbox label, .stMultiselect label { color: #1A1A1A !important; }
+
+/* Inputs */
+.stTextInput > div > div > input,
+.stTextArea textarea {
+  background-color: #FFFFFF !important; color: #1A1A1A !important; border: 1px solid #D7DDE2 !important;
 }
 
-/* Captions */
-.stCaption, .stMarkdown small { color: #4A4A4A !important; }
-
-/* ===== Fix Streamlit form submit button (light) ===== */
+/* ===== Submit button ===== */
 div[data-testid="stFormSubmitButton"] > button {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-    border-radius: 6px !important;
-    border: none !important;
-    box-shadow: none !important;
+  background-color: #0077C8 !important; color: #FFFFFF !important;
+  border-radius: 6px !important; border: none !important; box-shadow: none !important;
 }
-div[data-testid="stFormSubmitButton"] > button:hover {
-    background-color: #005A99 !important; /* your light hover */
-    color: #FFFFFF !important;
-}
-div[data-testid="stFormSubmitButton"] > button:active,
-div[data-testid="stFormSubmitButton"] > button:focus {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-    outline: none !important;
-    box-shadow: none !important;
-}
-div[data-testid="stFormSubmitButton"] > button:disabled {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-    opacity: 0.6 !important;
-}
-/* BaseWeb fallback (sometimes applied after user CSS) */
-div[data-testid="stFormSubmitButton"] [data-baseweb="button"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
-
-/* Scoped catch-all for any button inside the form footer region */
-form [data-testid="stFormSubmitButton"] button[class*="css"] {
-    background-color: #0077C8 !important;
-    color: #FFFFFF !important;
-}
+div[data-testid="stFormSubmitButton"] > button:hover { background-color: #005A99 !important; }
 </style>
         """, unsafe_allow_html=True)
 
@@ -906,6 +700,8 @@ if "selected_lfnr" not in st.session_state:
     st.session_state.selected_lfnr = None
 if "selected_ec_path" not in st.session_state:
     st.session_state.selected_ec_path = ""
+if "_prev_lfnr" not in st.session_state:
+    st.session_state._prev_lfnr = None
 
 # Password gate
 if not st.session_state.unlocked:
@@ -992,10 +788,19 @@ if not lfnr:
 # Load fields for the lfnr (no mapping, direct usage)
 with st.spinner(f"Loading form schema (lfnr {lfnr})…"):
     fields, _anon_default = get_form_fields_cached(int(lfnr))
-defaults = build_defaults(fields)
+
+# When lfnr changes, clear stale datetime widget keys (prevents controlled/uncontrolled flips)
+if st.session_state._prev_lfnr != lfnr:
+    # Clear any previously cached defaults for a *different* lfnr
+    to_del = [k for k in list(st.session_state.keys()) if str(k).startswith("_defaults_for_lfnr_") and not str(k).endswith(str(lfnr))]
+    for k in to_del:
+        st.session_state.pop(k, None)
+    st.session_state._prev_lfnr = lfnr
+
+defaults = _build_defaults_once(lfnr, fields)
 st.caption(f"Loaded form for lfnr: **{lfnr}**")
 
-# Namespace for widget keys to avoid stale collisions when lfnr changes
+# Namespace for widget keys to avoid collisions when lfnr changes
 form_ns = f"lfnr{lfnr}"
 
 # =============================================================================
@@ -1006,9 +811,7 @@ def render_datetime_field(label: str, key_root: str, default_dt: datetime, *, fo
     Renders date+time inputs using naive time for st.time_input to avoid tz issues.
     Returns a datetime; tzinfo is applied only if `force_utc` is True.
     """
-    # Defensive normalization of defaults
     try:
-        # default_dt may be tz-aware; ensure naive time for the widget
         t_default = default_dt.time().replace(second=0, microsecond=0, tzinfo=None)
         d_default = default_dt.date()
     except Exception:
@@ -1077,7 +880,7 @@ with st.form("report_form", clear_on_submit=False):
     # -----------------------------
     st.markdown("## 3) Report Details")
     with st.container():
-        for idx, f in enumerate(fields):
+        for f in fields:
             if f["name"] in ("eventClassificationId", "ReportText"):
                 continue
 
@@ -1086,8 +889,8 @@ with st.form("report_form", clear_on_submit=False):
             ftype = f["type"]
             required = bool(f.get("required"))
 
-            # Unique widget key per instance, namespaced by lfnr
-            widget_key_root = f"{form_ns}:{internal}__{idx}"
+            # Stable widget key per field name
+            widget_key_root = f"{form_ns}:{internal}"
 
             if ftype == "text":
                 v = st.text_input(label, value=str(defaults.get(internal, "")), key=widget_key_root)
@@ -1175,7 +978,6 @@ if submitted:
         val = values_by_internal.get(internal)
 
         if ftype == "datetime":
-            # Convert to string "YYYY-MM-DD HH:MM" (as before)
             converted = val.strftime("%Y-%m-%d %H:%M") if isinstance(val, datetime) else ""
             if required and not converted:
                 st.error(f"Mandatory field missing: {f.get('label', payload_name)}.")
