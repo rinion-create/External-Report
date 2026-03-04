@@ -27,7 +27,7 @@ FORMS_URL = os.getenv(
 )
 
 # NOTE: No ECID→FormID mapping anymore; we use the selected event classification ID (lfnr) directly.
-API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or ""
+API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or "xTWPwWr4qHB9TXvwDNopqFvRvvQTZIWL"
 DEFAULT_CREATOR_ID = int(os.getenv("IQSMS_CREATOR_ID", "141"))
 FORM_PASSWORD = os.getenv("FORM_PASSWORD", "123")
 KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground &amp; Cargo Safety Report").strip()
@@ -638,6 +638,25 @@ def apply_c365_theme():
 h1, h2, h3, h4, h5, h6, label, .stMarkdown, .stText,
 .stSelectbox label, .stMultiselect label { color: #FFFFFF !important; }
 
+/* ------------------------------------------------------------------
+   STREAMLIT TABS — DARK MODE FIX
+   Ensures text is always readable; removes BaseWeb's dark-grey default
+   ------------------------------------------------------------------ */
+.stTabs [role="tab"] {
+    color: #FFFFFF !important;            /* Always white text */
+    background-color: transparent !important;
+}
+
+.stTabs [role="tab"]:hover {
+    color: #FFFFFF !important;
+    background-color: #1A2D40 !important; /* subtle navy hover */
+}
+
+.stTabs [data-baseweb="tab-highlight"] {
+    color: #FFFFFF !important;             /* active tab text */
+    background-color: #003B5C !important;  /* your dark navy */
+    border-bottom: 3px solid #0077C8 !important; /* Comply365 blue */
+}
 /* Inputs: text + textarea */
 .stTextInput > div > div > input,
 .stTextArea textarea {
