@@ -31,7 +31,7 @@ FORMS_URL = os.getenv(
 API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or ""
 DEFAULT_CREATOR_ID = int(os.getenv("IQSMS_CREATOR_ID", "141"))
 FORM_PASSWORD = os.getenv("FORM_PASSWORD", "123")
-KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground & Cargo Safety Report").strip()
+KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground &amp; Cargo Safety Report").strip()
 
 EVENT_CLASS_PAGE_SIZE = int(os.getenv("IQSMS_EVENT_CLASS_PAGE_SIZE", "200"))
 EVENT_CLASS_CACHE_TTL_SECONDS = int(os.getenv("EVENT_CLASS_CACHE_TTL_SECONDS", "900"))
@@ -97,7 +97,7 @@ def _append_value(values: list, name: str, value: Any):
 
 
 # =============================================================================
-# Airport CSV discovery + load (cached) — simplified
+# Airport CSV discovery + load (cached)
 # =============================================================================
 def find_airport_csv_path() -> Path | None:
     """
@@ -288,7 +288,7 @@ def fetch_event_classifications_all_pages() -> dict:
         raise RuntimeError("Missing IQSMS_API_KEY environment variable.")
 
     headers = {"api-key": API_KEY, "Accept": "application/json"}
-    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground & Cargo Safety Report"
+    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground &amp; Cargo Safety Report"
 
     params = {"kind-of-report": kor, "limit": EVENT_CLASS_PAGE_SIZE, "page[number]": 1}
     resp = requests.get(EVENT_CLASS_URL, headers=headers, params=params, timeout=30)
@@ -387,7 +387,7 @@ def get_event_classifications_cached() -> tuple[list[dict], dict[int, str], set[
 
 
 # =============================================================================
-# Dynamic form schema (cached per lfnr)
+# Dynamic form schema (cached per lfnr) + hardening
 # =============================================================================
 def fetch_form_schema(lfnr: int) -> dict:
     """
@@ -422,14 +422,17 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         "Airport of Occurrence": "AirportOccurrence",
         "Location on aerodrome": "AerodromeLocation",
         "Diversion (if applicable)": "Diversion",
+        # HTML-encoded variants collapsed to same internal name:
         "Date &amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp; Time of Event (Local)": "DateTimeLocal",
         "Date &amp;amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp;amp; Time of Event (Local)": "DateTimeLocal",
         "Date &amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
         "Date &amp;amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
+        "Date &amp;amp;amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
+        "Date &amp; Time of Event (Local)": "DateTimeLocal",
+        "Date &amp;amp; Time of Event (Local)": "DateTimeLocal",
+        "Date &amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
         "Date &amp;amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
+        "Date &amp;amp;amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
         "Flight Number": "FlightNumber",
         "Call Sign": "CallSign",
         "Inflight Return": "InflightReturn",
@@ -463,6 +466,9 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         "hint": "",
     })
 
+    # ✅ Deduplicate by internal name to prevent duplicate widgets (esp. DateTimeUTC/Local)
+    seen_internal: set[str] = set()
+
     for rf in raw_fields:
         if not isinstance(rf, dict):
             continue
@@ -491,6 +497,11 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         internal_name = name_map.get(payload_name)
         if not internal_name:
             internal_name = re.sub(r"[^A-Za-z0-9_]", "", re.sub(r"\s+", "_", label)).strip("_") or "Field"
+
+        # Skip duplicates with same internal name
+        if internal_name in seen_internal:
+            continue
+        seen_internal.add(internal_name)
 
         field_def = {
             "label": label,
@@ -568,7 +579,7 @@ def build_defaults(fields: list[dict]) -> dict[str, Any]:
     defaults: dict[str, Any] = {}
     for f in fields:
         if f["type"] == "datetime":
-            defaults[f["name"]] = _now_utc()
+            defaults[f["name"]] = _now_utc()  # tz-aware; we’ll pass naive time to st.time_input
         elif f["type"] == "multiselect":
             defaults[f["name"]] = f.get("default", [])
         else:
@@ -899,8 +910,8 @@ if "selected_ec_path" not in st.session_state:
 # Password gate
 if not st.session_state.unlocked:
     st.subheader("Protected Form")
-    pw = st.text_input("Password", type="password")
-    if st.button("Unlock"):
+    pw = st.text_input("Password", type="password", key="pw_input")
+    if st.button("Unlock", key="unlock_btn"):
         if (pw or "").strip() == FORM_PASSWORD:
             st.session_state.unlocked = True
             st.rerun()
@@ -911,7 +922,7 @@ if not st.session_state.unlocked:
 # Logout button (top-right-ish)
 c = st.columns([3, 1])
 with c[1]:
-    if st.button("Lock / Logout"):
+    if st.button("Lock / Logout", key="logout_btn"):
         st.session_state.unlocked = False
         st.session_state.selected_lfnr = None
         st.session_state.selected_ec_path = ""
@@ -931,7 +942,7 @@ st.markdown("## 1) Event Classification")
 tab_search, tab_browse = st.tabs(["Search", "Browse (Area → Type → Classification)"])
 
 with tab_search:
-    q = st.text_input("Search classification path", value="")
+    q = st.text_input("Search classification path", value="", key="search_path")
     matches = []
     if len(q.strip()) >= 2:
         qq = q.strip().lower()
@@ -939,7 +950,7 @@ with tab_search:
 
     if matches:
         options = [f"{m['id']} — {m['path']}" for m in matches]
-        chosen = st.selectbox("Matches", options=options)
+        chosen = st.selectbox("Matches", options=options, key="matches_select")
         if chosen:
             chosen_lfnr = int(chosen.split(" — ", 1)[0].strip())
             st.session_state.selected_lfnr = chosen_lfnr
@@ -950,14 +961,22 @@ with tab_search:
 
 with tab_browse:
     areas = sorted(ec_hierarchy.keys(), key=lambda s: s.lower())
-    area = st.selectbox("Area of Occurrence", areas, index=0 if areas else None)
-    types = sorted(ec_hierarchy.get(area, {}).keys(), key=lambda s: s.lower()) if area else []
-    typ = st.selectbox("Type of Occurrence", types, index=0 if types else None)
-    leaves = ec_hierarchy.get(area, {}).get(typ, []) if area and typ else []
+    if areas:
+        area = st.selectbox("Area of Occurrence", areas, index=0, key="area_select")
+    else:
+        area = None
+        st.info("No areas available.")
 
+    types = sorted(ec_hierarchy.get(area, {}).keys(), key=lambda s: s.lower()) if area else []
+    if types:
+        typ = st.selectbox("Type of Occurrence", types, index=0, key="type_select")
+    else:
+        typ = None
+
+    leaves = ec_hierarchy.get(area, {}).get(typ, []) if area and typ else []
     if leaves:
         leaf_options = [f"{leaf_id} — {cls}" for (leaf_id, cls, _path) in leaves]
-        chosen_leaf = st.selectbox("Event Classification", leaf_options)
+        chosen_leaf = st.selectbox("Event Classification", leaf_options, key="leaf_select")
         chosen_lfnr = int(chosen_leaf.split(" — ", 1)[0].strip())
         st.session_state.selected_lfnr = chosen_lfnr
         st.session_state.selected_ec_path = ec_by_id.get(chosen_lfnr, "")
@@ -976,25 +995,39 @@ with st.spinner(f"Loading form schema (lfnr {lfnr})…"):
 defaults = build_defaults(fields)
 st.caption(f"Loaded form for lfnr: **{lfnr}**")
 
+# Namespace for widget keys to avoid stale collisions when lfnr changes
+form_ns = f"lfnr{lfnr}"
 
 # =============================================================================
 # FORM UI (dedicated sections inside ONE form)
 # =============================================================================
-def render_datetime_field(label: str, key: str, default_dt: datetime) -> datetime:
+def render_datetime_field(label: str, key_root: str, default_dt: datetime, *, force_utc: bool) -> datetime:
+    """
+    Renders date+time inputs using naive time for st.time_input to avoid tz issues.
+    Returns a datetime; tzinfo is applied only if `force_utc` is True.
+    """
+    # Defensive normalization of defaults
+    try:
+        # default_dt may be tz-aware; ensure naive time for the widget
+        t_default = default_dt.time().replace(second=0, microsecond=0, tzinfo=None)
+        d_default = default_dt.date()
+    except Exception:
+        now = _now_utc()
+        d_default = now.date()
+        t_default = now.time().replace(second=0, microsecond=0, tzinfo=None)
+
     c1, c2 = st.columns(2)
     with c1:
-        d = st.date_input(label + " (date)", value=default_dt.date(), key=key + "_date")
+        d = st.date_input(label + " (date)", value=d_default, key=key_root + "_date")
     with c2:
-        t = st.time_input(
-            label + " (time)",
-            value=default_dt.time().replace(second=0, microsecond=0),
-            key=key + "_time"
-        )
-    return datetime.combine(d, t, tzinfo=timezone.utc)
+        t = st.time_input(label + " (time)", value=t_default, key=key_root + "_time")
+
+    dt = datetime.combine(d, t)
+    return dt.replace(tzinfo=timezone.utc) if force_utc else dt
 
 
-def render_airport_field(label: str, key: str, required: bool) -> str:
-    q = st.text_input(label, key=key + "_query", placeholder="e.g. VIE, LOWW, Vienna")
+def render_airport_field(label: str, key_root: str, required: bool) -> str:
+    q = st.text_input(label, key=key_root + "_query", placeholder="e.g. VIE, LOWW, Vienna")
 
     # Auto-confirm exact IATA/ICAO when unambiguous
     iata_auto, autoconfirmed = try_autoconfirm_airport(q)
@@ -1008,7 +1041,7 @@ def render_airport_field(label: str, key: str, required: bool) -> str:
     suggestions = airport_suggestions(q, limit=20)
     choice = None
     if suggestions:
-        choice = st.selectbox("Suggestions", ["(keep typed value)"] + suggestions, key=key + "_choice")
+        choice = st.selectbox("Suggestions", ["(keep typed value)"] + suggestions, key=key_root + "_choice")
 
     raw = q
     if choice and choice != "(keep typed value)":
@@ -1035,69 +1068,78 @@ with st.form("report_form", clear_on_submit=False):
             value=str(defaults.get("ReportText", "")),
             height=240,
             label_visibility="collapsed",
+            key=f"{form_ns}:ReportText"
         )
-        values_by_internal["ReportText"] = report_text
+        values_by_internal["ReportText"] = report_text.strip() if isinstance(report_text, str) else report_text
 
     # -----------------------------
     # 3) Report Details
     # -----------------------------
     st.markdown("## 3) Report Details")
     with st.container():
-        for f in fields:
+        for idx, f in enumerate(fields):
             if f["name"] in ("eventClassificationId", "ReportText"):
                 continue
 
             label = f["label"] + (" *" if f.get("required") else "")
-            key = f["name"]
+            internal = f["name"]
             ftype = f["type"]
             required = bool(f.get("required"))
 
+            # Unique widget key per instance, namespaced by lfnr
+            widget_key_root = f"{form_ns}:{internal}__{idx}"
+
             if ftype == "text":
-                v = st.text_input(label, value=str(defaults.get(key, "")), key=key)
-                if key == "FlightNumber":
+                v = st.text_input(label, value=str(defaults.get(internal, "")), key=widget_key_root)
+                if internal == "FlightNumber":
                     v = (v or "").strip().upper()[:8]
-                elif key == "CallSign":
+                elif internal == "CallSign":
                     v = (v or "").strip().upper()[:50]
-                values_by_internal[key] = v.strip() if isinstance(v, str) else v
+                values_by_internal[internal] = v.strip() if isinstance(v, str) else v
 
             elif ftype == "textarea":
-                v = st.text_area(label, value=str(defaults.get(key, "")), key=key)
-                values_by_internal[key] = v.strip() if isinstance(v, str) else v
+                v = st.text_area(label, value=str(defaults.get(internal, "")), key=widget_key_root)
+                values_by_internal[internal] = v.strip() if isinstance(v, str) else v
 
             elif ftype == "select":
                 opts = [""] + list(f.get("options", []))
-                dv = defaults.get(key, "")
-                idx = opts.index(dv) if dv in opts else 0
-                v = st.selectbox(label, opts, index=idx, key=key)
-                values_by_internal[key] = v
+                dv = defaults.get(internal, "")
+                idx0 = opts.index(dv) if dv in opts else 0
+                v = st.selectbox(label, opts, index=idx0, key=widget_key_root)
+                values_by_internal[internal] = v
 
             elif ftype == "multiselect":
                 opts = list(f.get("options", []))
-                dv = defaults.get(key, [])
+                dv = defaults.get(internal, [])
                 if not isinstance(dv, list):
                     dv = [dv]
-                v = st.multiselect(label, opts, default=[x for x in dv if x in opts], key=key)
-                values_by_internal[key] = v
+                v = st.multiselect(label, opts, default=[x for x in dv if x in opts], key=widget_key_root)
+                values_by_internal[internal] = v
 
             elif ftype == "datetime":
-                default_dt = defaults.get(key) or _now_utc()
+                default_dt = defaults.get(internal) or _now_utc()
                 if isinstance(default_dt, str):
                     try:
                         default_dt = datetime.fromisoformat(default_dt)
                     except Exception:
                         default_dt = _now_utc()
-                dt = render_datetime_field(label, key, default_dt)
-                values_by_internal[key] = dt
+                dt = render_datetime_field(
+                    label,
+                    widget_key_root,
+                    default_dt,
+                    force_utc=(internal == "DateTimeUTC")
+                )
+                values_by_internal[internal] = dt
 
             elif ftype == "iata":
-                iata = render_airport_field(label, key, required)
-                values_by_internal[key] = iata
+                iata = render_airport_field(label, widget_key_root, required)
+                values_by_internal[internal] = iata
 
             else:
-                v = st.text_input(label, value=str(defaults.get(key, "")), key=key)
-                values_by_internal[key] = v.strip() if isinstance(v, str) else v
+                v = st.text_input(label, value=str(defaults.get(internal, "")), key=widget_key_root)
+                values_by_internal[internal] = v.strip() if isinstance(v, str) else v
 
-    submitted = st.form_submit_button("Submit Report")
+    submitted = st.form_submit_button("Submit Report", use_container_width=False, type="primary", disabled=False, help=None)
 
 
 # =============================================================================
@@ -1133,6 +1175,7 @@ if submitted:
         val = values_by_internal.get(internal)
 
         if ftype == "datetime":
+            # Convert to string "YYYY-MM-DD HH:MM" (as before)
             converted = val.strftime("%Y-%m-%d %H:%M") if isinstance(val, datetime) else ""
             if required and not converted:
                 st.error(f"Mandatory field missing: {f.get('label', payload_name)}.")
