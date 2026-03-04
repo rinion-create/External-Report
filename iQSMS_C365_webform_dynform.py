@@ -27,7 +27,7 @@ FORMS_URL = os.getenv(
 )
 
 # NOTE: No ECID→FormID mapping anymore; we use the selected event classification ID (lfnr) directly.
-API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or "xTWPwWr4qHB9TXvwDNopqFvRvvQTZIWL"
+API_KEY = os.getenv("IQSMS_API_KEY", "").strip() or ""
 DEFAULT_CREATOR_ID = int(os.getenv("IQSMS_CREATOR_ID", "141"))
 FORM_PASSWORD = os.getenv("FORM_PASSWORD", "123")
 KIND_OF_REPORT = os.getenv("IQSMS_KIND_OF_REPORT", "Ground &amp; Cargo Safety Report").strip()
@@ -284,7 +284,7 @@ def fetch_event_classifications_all_pages() -> dict:
         raise RuntimeError("Missing IQSMS_API_KEY environment variable.")
 
     headers = {"api-key": API_KEY, "Accept": "application/json"}
-    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground &amp; Cargo Safety Report"
+    kor = html.unescape(KIND_OF_REPORT).strip() or "Ground & Cargo Safety Report"
 
     params = {"kind-of-report": kor, "limit": EVENT_CLASS_PAGE_SIZE, "page[number]": 1}
     resp = requests.get(EVENT_CLASS_URL, headers=headers, params=params, timeout=30)
@@ -419,16 +419,8 @@ def normalize_fields_from_schema(schema: dict) -> tuple[list[dict], bool]:
         "Location on aerodrome": "AerodromeLocation",
         "Diversion (if applicable)": "Diversion",
         # HTML-encoded variants collapsed to same internal name:
-        "Date &amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp;amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp;amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp;amp;amp;amp;amp; Time of Event (UTC)": "DateTimeUTC",
-        "Date &amp; Time of Event (Local)": "DateTimeLocal",
-        "Date &amp;amp; Time of Event (Local)": "DateTimeLocal",
-        "Date &amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
-        "Date &amp;amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
-        "Date &amp;amp;amp;amp;amp; Time of Event (Local)": "DateTimeLocal",
+        "Date & Time of Event (UTC)": "DateTimeUTC",
+        "Date & Time of Event (Local)": "DateTimeLocal",
         "Flight Number": "FlightNumber",
         "Call Sign": "CallSign",
         "Inflight Return": "InflightReturn",
@@ -614,7 +606,7 @@ st.subheader("External Ground Ops Report")
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
 
-toggle = st.toggle("🌗 Dark Mode", value=(st.session_state.theme == "dark"))
+toggle = st.toggle("Comply365 Mode", value=(st.session_state.theme == "dark"))
 st.session_state.theme = "dark" if toggle else "light"
 
 def apply_c365_theme():
@@ -626,6 +618,16 @@ def apply_c365_theme():
    DARK MODE — Comply365 Branding
 --------------------------------------------------------- */
 .stApp { background-color: #003B5C !important; color: #FFFFFF !important; }
+
+/* ---------------------------------------------------------
+   DARK MODE — Fix toggle label ("Comply365 Mode")
+--------------------------------------------------------- */
+.stToggle > label,
+.stToggle > div > label,
+div[data-baseweb="switch"] + label {
+    color: #FFFFFF !important;
+    opacity: 1 !important;
+}
 
 /* Buttons */
 .stButton > button, form .stButton > button {
@@ -643,20 +645,85 @@ h1, h2, h3, h4, h5, h6, label, .stMarkdown, .stText,
    Ensures text is always readable; removes BaseWeb's dark-grey default
    ------------------------------------------------------------------ */
 .stTabs [role="tab"] {
-    color: #FFFFFF !important;            /* Always white text */
+    color: #FFFFFF !important;            /* Always white text (selected) */
     background-color: transparent !important;
 }
-
 .stTabs [role="tab"]:hover {
     color: #FFFFFF !important;
     background-color: #1A2D40 !important; /* subtle navy hover */
 }
-
 .stTabs [data-baseweb="tab-highlight"] {
     color: #FFFFFF !important;             /* active tab text */
     background-color: #003B5C !important;  /* your dark navy */
     border-bottom: 3px solid #0077C8 !important; /* Comply365 blue */
 }
+
+/* ---------------------------------------------------------
+   DARK MODE — SELECTBOX + MULTISELECT MATCH TEXT INPUT
+--------------------------------------------------------- */
+
+/* Selectbox main control */
+div[data-baseweb="select"] > div {
+    background-color: #0E1E2C !important;   /* same as text input */
+    color: #FFFFFF !important;
+    border: 1px solid #0077C8 !important;
+}
+/* Selected text inside the control */
+div[data-baseweb="select"] div[role="button"] {
+    color: #FFFFFF !important;
+}
+/* Dropdown menu container */
+ul[role="listbox"] {
+    background-color: #0E1E2C !important;   /* same dark background */
+    color: #FFFFFF !important;
+    border: 1px solid #0077C8 !important;
+}
+/* Hovered option */
+ul[role="listbox"] li:hover,
+ul[role="listbox"] li[data-highlighted="true"] {
+    background-color: #1A2D40 !important; /* subtle lighter hover */
+    color: #FFFFFF !important;
+}
+
+/* ---------------------------------------------------------
+   DARK MODE — DATE + TIME INPUT FIELDS MATCH TEXT INPUT
+--------------------------------------------------------- */
+
+/* Date input field */
+input[type="date"],
+.stDateInput > div > div > input {
+    background-color: #0E1E2C !important;  /* same as text input */
+    color: #FFFFFF !important;
+    border: 1px solid #0077C8 !important;
+}
+
+/* Time input field */
+input[type="time"],
+.stTimeInput > div > div > input {
+    background-color: #0E1E2C !important;  /* same dark background */
+    color: #FFFFFF !important;
+    border: 1px solid #0077C8 !important;
+}
+
+/* Calendar popover */
+.stDateInput div[data-baseweb="popover"] {
+    background-color: #0E1E2C !important;
+    color: #FFFFFF !important;
+}
+
+/* Calendar day cells */
+.stDateInput [role="gridcell"] {
+    background-color: #0E1E2C !important;
+    color: #FFFFFF !important;
+}
+
+/* Highlighted/hovered day */
+.stDateInput [role="gridcell"]:hover,
+.stDateInput [role="gridcell"][aria-selected="true"] {
+    background-color: #1A2D40 !important;
+    color: #FFFFFF !important;
+}
+
 /* Inputs: text + textarea */
 .stTextInput > div > div > input,
 .stTextArea textarea {
@@ -673,6 +740,69 @@ div[data-testid="stFormSubmitButton"] > button {
   border-radius: 6px !important; border: none !important; box-shadow: none !important;
 }
 div[data-testid="stFormSubmitButton"] > button:hover { background-color: #3399E6 !important; }
+
+/* ---------------------------------------------------------
+   DARK MODE — Fix "inactive" dark grey text everywhere
+   (tabs, disabled controls, placeholders, captions/help)
+--------------------------------------------------------- */
+
+/* Tabs — ensure inactive/unselected tabs are not greyed */
+.stTabs [role="tab"], .stTabs [role="tab"] * {
+  color: #FFFFFF !important;
+}
+.stTabs [role="tab"][aria-selected="false"],
+.stTabs [role="tab"][aria-selected="false"] * {
+  color: #DCE7F3 !important;
+  opacity: 1 !important;
+}
+
+/* Disabled controls — prevent grey + opacity dimming */
+button:disabled,
+[disabled],
+[aria-disabled="true"],
+div[aria-disabled="true"] *,
+label[aria-disabled="true"] {
+  color: #9FC6E8 !important;
+  opacity: 1 !important;
+}
+
+/* Input/textarea placeholders */
+input::placeholder,
+textarea::placeholder {
+  color: #B0C4D8 !important;
+  opacity: 1 !important;
+}
+
+/* BaseWeb Select pseudo-placeholder */
+div[data-baseweb="select"] [aria-hidden="true"],
+div[data-baseweb="select"] [data-baseweb="selected"] [aria-hidden="true"] {
+  color: #B0C4D8 !important;
+  opacity: 1 !important;
+}
+
+/* Captions, help, subtle text */
+[data-testid="stCaptionContainer"] *,
+small, .help, .hint, .subheader {
+  color: #B0C4D8 !important;
+  opacity: 1 !important;
+}
+
+/* Radios/checkboxes labels (including disabled) */
+.stCheckbox label, .stRadio label { color: #FFFFFF !important; }
+.stCheckbox [aria-disabled="true"] label,
+.stRadio [aria-disabled="true"] label {
+  color: #9FC6E8 !important;
+  opacity: 1 !important;
+}
+
+/* Defensive: ensure no framework-wide secondary dimming leaks through */
+[data-baseweb] {
+  --ui-secondary-fg: #DCE7F3;
+}
+[data-baseweb] * { text-shadow: none !important; }
+
+/* Let the browser know we’re in dark color-scheme for native widgets */
+.stApp { color-scheme: dark; }
 </style>
         """, unsafe_allow_html=True)
     else:
